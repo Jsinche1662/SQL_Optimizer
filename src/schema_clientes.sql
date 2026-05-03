@@ -3,7 +3,7 @@
 -- sql-syntax-check.yml fallará y la Branch Protection Rule
 -- bloqueará el merge.
 
-CREATE TABLE clientes (
+CREATE TABLE clientes 
     id          INTEGER       NOT NULL PRIMARY KEY,
     nombre      VARCHAR(120)  NOT NULL,
     pais        CHAR(2)       NOT NULL,
