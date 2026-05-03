@@ -1,0 +1,31 @@
+# Configuración de sqlfluff
+# Doc: https://docs.sqlfluff.com/en/stable/configuration.html
+#
+# Estrategia: queremos que el job FALLE solo cuando haya errores reales de
+# parseo/sintaxis (errores PRS / TMP / LXR), no por reglas de estilo.
+# Por eso desactivamos las reglas L*** y dejamos solo las del parser.
+
+[sqlfluff]
+# "ansi" es el dialecto multi-vendor por defecto. Si tu equipo usa Postgres,
+# MySQL o T-SQL puedes cambiarlo aquí (postgres / mysql / tsql / snowflake / bigquery / ...).
+dialect = ansi
+
+# Procesar todos los archivos .sql
+sql_file_exts = .sql,.ddl,.dml
+
+# Solo nos interesa el parseo: ignoramos warnings de estilo para que el
+# gate sea estrictamente "compila o no compila".
+exclude_rules = all
+
+# Plantillas: usamos jinja por defecto; si no usas Jinja basta con "raw".
+templater = jinja
+
+# Mostrar nombre de regla en el output
+nocolor = False
+
+[sqlfluff:indentation]
+tab_space_size = 2
+indent_unit = space
+
+[sqlfluff:templater:jinja]
+apply_dbt_builtins = False

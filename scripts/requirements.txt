@@ -1,0 +1,6 @@
+langgraph>=0.2.40
+langchain>=0.3.0
+langchain-openai>=0.2.0
+openai>=1.40.0
+sqlglot>=25.0.0
+requests>=2.31.0

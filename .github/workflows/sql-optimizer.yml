@@ -1,0 +1,70 @@
+name: SQL Optimizer (LangGraph + OpenAI)
+
+# Se dispara cuando se abre / actualiza una PR contra develop
+# y solo si hay cambios en la carpeta sql/
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - "sql/**.sql"
+      - ".github/workflows/sql-optimizer.yml"
+      - "scripts/sql_optimizer.py"
+      - "scripts/requirements.txt"
+
+# Permisos mínimos para que el job pueda comentar la PR
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sql-optimizer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  optimize:
+    name: Validate + Optimize SQL with LangGraph
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout PR HEAD
+        uses: actions/checkout@v4
+        with:
+          # Necesitamos el HEAD real de la PR, no el merge commit,
+          # para leer los archivos tal cual los modificó el autor.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Run SQL Optimizer agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4o-mini' }}
+          SQL_DIALECT: ${{ vars.SQL_DIALECT || 'ansi' }}
+          TARGET_FOLDER: sql
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/sql_optimizer.py
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql-optimizer-report
+          path: sql_optimizer_report.md
+          if-no-files-found: ignore

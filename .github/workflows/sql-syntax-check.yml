@@ -1,0 +1,97 @@
+name: SQL Syntax Gate (src/)
+
+# Bloquea el merge si los .sql de src/ no son sintácticamente válidos.
+# Se ejecuta en TODA pull request (no solo a develop) para que sirva
+# como Required Status Check en cualquier rama base.
+on:
+  pull_request:
+    paths:
+      - "src/**.sql"
+      - ".sqlfluff"
+      - ".github/workflows/sql-syntax-check.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: sql-syntax-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: sqlfluff syntax check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout PR HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install sqlfluff
+        run: |
+          python -m pip install --upgrade pip
+          pip install "sqlfluff>=3.0.0"
+
+      - name: Detect changed SQL files in src/
+        id: changes
+        run: |
+          set -e
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          # Nombres de archivos modificados/agregados que terminen en .sql dentro de src/
+          FILES=$(git diff --name-only --diff-filter=AMR "$BASE" "$HEAD" \
+            | grep -E '^src/.*\.sql$' || true)
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$FILES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          if [ -z "$FILES" ]; then
+            echo "No changed SQL files in src/."
+          else
+            echo "Changed SQL files:"
+            echo "$FILES"
+          fi
+
+      - name: Run sqlfluff (parse-only) on changed files
+        id: lint
+        if: steps.changes.outputs.files != ''
+        run: |
+          set -o pipefail
+          # Pasamos solo los archivos cambiados; el job falla si hay errores
+          # de parseo / templating / sintaxis. Esto permite el bloqueo vía
+          # Branch Protection Rule (Required Status Check).
+          echo "${{ steps.changes.outputs.files }}" \
+            | xargs sqlfluff lint --format github-annotation-native \
+                --disable-progress-bar \
+                --nofail-on-violation false
+
+      - name: Comment failure on PR
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              '## SQL Syntax Gate — FAILED',
+              '',
+              'Se detectaron errores de sintaxis SQL en archivos de `src/`.',
+              'Revisa la pestaña **Checks** para ver las anotaciones inline.',
+              '',
+              'Este check es obligatorio: el merge quedará bloqueado por la',
+              '`Branch Protection Rule` hasta que todos los archivos `.sql`',
+              'modificados pasen `sqlfluff lint`.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
