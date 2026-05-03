@@ -66,13 +66,15 @@ jobs:
         if: steps.changes.outputs.files != ''
         run: |
           set -o pipefail
-          # Pasamos solo los archivos cambiados; el job falla si hay errores
-          # de parseo / templating / sintaxis. Esto permite el bloqueo vía
-          # Branch Protection Rule (Required Status Check).
+          # Pasamos solo los archivos cambiados. Por defecto `sqlfluff lint`
+          # retorna exit code != 0 cuando hay violaciones, lo que hace fallar
+          # el job y permite el bloqueo vía Branch Protection Rule.
+          # En .sqlfluff configuramos `exclude_rules = all` para que solo
+          # afloren errores de parser (PRS), es decir, sintaxis real.
           echo "${{ steps.changes.outputs.files }}" \
-            | xargs sqlfluff lint --format github-annotation-native \
-                --disable-progress-bar \
-                --nofail-on-violation false
+            | xargs sqlfluff lint \
+                --format github-annotation-native \
+                --disable-progress-bar
 
       - name: Comment failure on PR
         if: failure()
