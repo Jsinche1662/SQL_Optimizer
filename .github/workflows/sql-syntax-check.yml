@@ -1,14 +1,18 @@
 name: SQL Syntax Gate (src/)
 
-# Bloquea el merge si los .sql de src/ no son sintácticamente válidos
-# y publica un comentario en la PR con el detalle de cada error
-# (archivo, línea, columna, mensaje).
+# Bloquea el merge si los .sql de src/ no son sintácticamente válidos.
+# Además publica un comentario detallado en la PR con:
+#   - tabla de errores (línea/columna/código/mensaje) producida por sqlfluff,
+#   - diagnóstico humano + corrección sugerida producidos por un agente
+#     LangGraph + OpenAI (validada con sqlglot).
 on:
   pull_request:
     paths:
       - "src/**.sql"
       - ".sqlfluff"
       - ".github/workflows/sql-syntax-check.yml"
+      - "scripts/sql_syntax_fixer.py"
+      - "scripts/requirements.txt"
 
 permissions:
   contents: read
@@ -22,7 +26,7 @@ jobs:
   lint:
     name: sqlfluff syntax check
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
       - name: Checkout PR HEAD
@@ -36,11 +40,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: scripts/requirements.txt
 
-      - name: Install sqlfluff
+      - name: Install dependencies (sqlfluff + LangGraph stack)
         run: |
           python -m pip install --upgrade pip
           pip install "sqlfluff>=3.0.0"
+          pip install -r scripts/requirements.txt
 
       - name: Detect changed SQL files in src/
         id: changes
@@ -60,146 +66,40 @@ jobs:
             echo "$FILES"
           fi
 
-      - name: Run sqlfluff (parse-only) and capture violations
-        id: lint
+      - name: Run sqlfluff and capture violations
         if: steps.changes.outputs.files != ''
         run: |
-          # --nofail para que NO termine el step aquí; el exit code real
-          # lo decidimos después según haya o no violaciones.
-          # --format json para poder parsear cada error con detalle.
-          # También dejamos --format github-annotation-native para tener
-          # anotaciones inline en la pestaña Files de la PR.
           set +e
           FILES="${{ steps.changes.outputs.files }}"
 
-          # 1) Anotaciones nativas (aparecen inline en "Files changed")
+          # 1) Anotaciones inline en la pestaña "Files changed".
           echo "$FILES" | xargs sqlfluff lint \
               --format github-annotation-native \
               --disable-progress-bar --nofail || true
 
-          # 2) Salida JSON para construir el comentario detallado
+          # 2) Reporte JSON estructurado para el fixer.
           echo "$FILES" | xargs sqlfluff lint \
               --format json \
               --disable-progress-bar --nofail > sqlfluff_report.json
           echo "JSON_BYTES=$(wc -c < sqlfluff_report.json)"
           set -e
 
-      - name: Build detailed PR comment + decide exit code
-        id: build
+      - name: Diagnose + propose fix (LangGraph + OpenAI)
         if: steps.changes.outputs.files != ''
         env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4o-mini' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python3 - <<'PY'
-          import json, os, sys, urllib.request, urllib.error
-
-          with open("sqlfluff_report.json", "r", encoding="utf-8") as f:
-              data = json.load(f)
-
-          # Solo nos interesan errores REALES de sintaxis (parser/lexer/template)
-          # ya que .sqlfluff tiene exclude_rules=all. Aún así filtramos por si acaso.
-          SYNTAX_CODES = {"PRS", "TMP", "LXR"}
-
-          violations = []  # tuplas (file, line, col, code, msg)
-          for entry in data:
-              fp = entry.get("filepath", "?")
-              # Normalizamos a ruta relativa del repo
-              fp_rel = fp.split("/./")[-1].lstrip("./")
-              for v in entry.get("violations", []):
-                  code = v.get("code", "")
-                  if code not in SYNTAX_CODES:
-                      continue
-                  violations.append((
-                      fp_rel,
-                      v.get("start_line_no", 0),
-                      v.get("start_line_pos", 0),
-                      code,
-                      v.get("description", "").strip(),
-                  ))
-
-          repo = os.environ["GITHUB_REPOSITORY"]
-          pr   = os.environ["PR_NUMBER"]
-          sha  = os.environ["HEAD_SHA"]
-          token = os.environ["GITHUB_TOKEN"]
-
-          if not violations:
-              body = (
-                  "## SQL Syntax Gate — PASSED\n\n"
-                  "Todos los archivos `.sql` modificados en `src/` son sintácticamente válidos.\n\n"
-                  f"_commit `{sha[:7]}` · sqlfluff parse-only_"
-              )
-              should_fail = False
-          else:
-              # Agrupamos por archivo
-              by_file = {}
-              for f, ln, col, code, msg in violations:
-                  by_file.setdefault(f, []).append((ln, col, code, msg))
-
-              parts = [
-                  "## SQL Syntax Gate — FAILED",
-                  "",
-                  f"Se detectaron **{len(violations)}** error(es) de sintaxis "
-                  f"en **{len(by_file)}** archivo(s) de `src/`.",
-                  "",
-                  "El merge queda bloqueado por la `Branch Protection Rule` "
-                  "hasta que todos los errores estén corregidos.",
-                  "",
-              ]
-              for fname, errs in by_file.items():
-                  parts.append(f"### `{fname}`")
-                  parts.append("")
-                  parts.append("| Línea | Col | Código | Mensaje |")
-                  parts.append("|------:|----:|:------:|---------|")
-                  for ln, col, code, msg in errs:
-                      # Escape pipes en el mensaje para no romper la tabla
-                      safe = msg.replace("|", "\\|")
-                      parts.append(f"| {ln} | {col} | `{code}` | {safe} |")
-                  parts.append("")
-                  parts.append(
-                      f"[Abrir archivo](../blob/{sha}/{fname})  ·  "
-                      f"[Ver diff](../pull/{pr}/files)"
-                  )
-                  parts.append("")
-
-              parts.append("---")
-              parts.append(
-                  "_Reporte generado por `sql-syntax-check.yml` "
-                  "(sqlfluff parse-only, dialecto ANSI). "
-                  "Las anotaciones también aparecen inline en la pestaña **Files changed**._"
-              )
-              body = "\n".join(parts)
-              should_fail = True
-
-          # Publicar comentario en la PR
-          url = f"https://api.github.com/repos/{repo}/issues/{pr}/comments"
-          req = urllib.request.Request(
-              url,
-              data=json.dumps({"body": body}).encode("utf-8"),
-              headers={
-                  "Authorization": f"Bearer {token}",
-                  "Accept": "application/vnd.github+json",
-                  "X-GitHub-Api-Version": "2022-11-28",
-                  "Content-Type": "application/json",
-              },
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  print(f"[ok] Comentario publicado ({resp.status})")
-          except urllib.error.HTTPError as e:
-              print(f"[error] HTTP {e.code}: {e.read().decode('utf-8', 'ignore')}")
-
-          # Job summary también (visible en la pestaña Summary del run)
-          summary = os.environ.get("GITHUB_STEP_SUMMARY")
-          if summary:
-              with open(summary, "a", encoding="utf-8") as fh:
-                  fh.write(body + "\n")
-
-          sys.exit(1 if should_fail else 0)
-          PY
+          REPORT_PATH: sqlfluff_report.json
+        run: python scripts/sql_syntax_fixer.py
+        # El script:
+        #   - publica el comentario en la PR (con detalle + fix sugerido),
+        #   - escribe el mismo Markdown en GITHUB_STEP_SUMMARY,
+        #   - retorna exit 1 si hubo errores de sintaxis,
+        # lo que hace fallar el job y dispara la Branch Protection Rule.
 
       - name: Upload sqlfluff JSON report
         if: always() && steps.changes.outputs.files != ''
