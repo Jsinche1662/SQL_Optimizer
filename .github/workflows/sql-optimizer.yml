@@ -1,4 +1,4 @@
-name: SQL Optimizer (LangGraph + OpenAI)
+name: SQL Optimizer
 
 # Se dispara cuando se abre / actualiza una PR contra develop
 # y solo si hay cambios en la carpeta sql/
