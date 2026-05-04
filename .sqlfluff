@@ -1,0 +1,26 @@
+# Configuración de sqlfluff
+# Doc: https://docs.sqlfluff.com/en/stable/configuration.html
+#
+# El job tendra estado de FAIL cuando haya errores de
+# parseo/sintaxis (errores PRS / TMP / LXR), no por reglas de estilo.
+# Por eso desactivamos las reglas L*** y dejamos solo las del parser.
+
+[sqlfluff]
+dialect = ansi
+
+#Extensiones aceptadas
+sql_file_exts = .sql,.ddl,.dml
+
+# Se ignoran los warnings de estilo 
+exclude_rules = all
+templater = jinja
+
+# Mostrar nombre de regla en el output
+nocolor = False
+
+[sqlfluff:indentation]
+tab_space_size = 2
+indent_unit = space
+
+[sqlfluff:templater:jinja]
+apply_dbt_builtins = False
