@@ -1,4 +1,4 @@
-name: SQL Syntax Gate (src/)
+name: SQL Syntax Check (src/)
 
 # Bloquea el merge si los .sql de src/ no son sintácticamente válidos.
 # Además publica un comentario detallado en la PR con:
