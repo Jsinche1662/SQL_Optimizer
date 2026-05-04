@@ -1,6 +1,4 @@
-"""
-SQL Syntax Fixer 
-"""
+"""SQL Syntax Fixer Agent (LangGraph + OpenAI)."""
 from __future__ import annotations
 
 import json
@@ -9,12 +7,25 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, TypedDict
+
 import requests
 import sqlglot
 from sqlglot.errors import ParseError
+
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+
+# Line buffering para que los prints aparezcan en tiempo real en GitHub Actions
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
 
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -47,8 +58,8 @@ Devuelve EXCLUSIVAMENTE un JSON valido con esta forma:
 {
   "diagnostico": "<una linea: que falla>",
   "explicacion": "<2-3 lineas explicando el porque>",
-  "fix_sugerido": "<SQL corregido completo, en texto plano sin tildes invertidas>",
-  "cambios": ["<bullet 1>", "<bullet 2>", ...]
+  "fix_sugerido": "<SQL corregido completo, en texto plano>",
+  "cambios": ["<bullet 1>", "<bullet 2>"]
 }
 No agregues texto fuera del JSON. No uses markdown ni bloques de codigo.
 """
@@ -74,16 +85,17 @@ class State(TypedDict):
 
 
 def node_load_report(state: State) -> State:
+    log(f"[load] Leyendo {REPORT_PATH} ...")
     p = Path(REPORT_PATH)
     if not p.exists():
-        print(f"[load] {REPORT_PATH} no existe, asumiendo 0 violaciones.")
+        log(f"[load] {REPORT_PATH} no existe, asumiendo 0 violaciones.")
         state["files"] = []
         state["had_violations"] = False
         return state
 
     raw = p.read_text(encoding="utf-8").strip()
     if not raw:
-        print(f"[load] {REPORT_PATH} vacio, asumiendo 0 violaciones.")
+        log(f"[load] {REPORT_PATH} vacio, asumiendo 0 violaciones.")
         state["files"] = []
         state["had_violations"] = False
         return state
@@ -91,7 +103,7 @@ def node_load_report(state: State) -> State:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        print(f"[load] {REPORT_PATH} no es JSON valido ({e}); asumiendo 0 violaciones.")
+        log(f"[load] {REPORT_PATH} no es JSON valido ({e}); asumiendo 0 violaciones.")
         state["files"] = []
         state["had_violations"] = False
         return state
@@ -114,20 +126,31 @@ def node_load_report(state: State) -> State:
 
     state["files"] = files
     state["had_violations"] = bool(files)
-    print(f"[load] {len(files)} archivo(s) con errores de sintaxis.")
+    log(f"[load] {len(files)} archivo(s) con errores de sintaxis.")
     return state
 
 
 def node_diagnose(state: State) -> State:
     if not state["files"]:
+        log("[diagnose] Sin archivos con errores; nada que diagnosticar.")
         return state
     if not os.getenv("OPENAI_API_KEY"):
+        log("[diagnose] OPENAI_API_KEY no configurado; se omite diagnostico IA.")
         for f in state["files"]:
             f.llm_error = "OPENAI_API_KEY no configurado; no se generaron sugerencias."
         return state
 
-    llm = ChatOpenAI(model=OPENAI_MODEL, temperature=0)
-    for f in state["files"]:
+    log(f"[diagnose] Inicializando ChatOpenAI(model={OPENAI_MODEL}, timeout=60, max_retries=1)")
+    llm = ChatOpenAI(
+        model=OPENAI_MODEL,
+        temperature=0,
+        timeout=60,
+        max_retries=1,
+    )
+
+    total = len(state["files"])
+    for idx, f in enumerate(state["files"], start=1):
+        log(f"[diagnose] ({idx}/{total}) -> {f.path}")
         errs_str = "\n".join(
             f"- linea {v.get('start_line_no','?')}, col {v.get('start_line_pos','?')} "
             f"[{v.get('code','?')}]: {v.get('description','').strip()}"
@@ -152,8 +175,10 @@ def node_diagnose(state: State) -> State:
             f.explicacion = data.get("explicacion", "").strip()
             f.fix_sugerido = data.get("fix_sugerido", "").strip()
             f.cambios = list(data.get("cambios", []))
+            log(f"[diagnose] ({idx}/{total}) OK")
         except Exception as e:
-            f.llm_error = f"Error consultando al LLM: {e}"
+            f.llm_error = f"Error consultando al LLM: {type(e).__name__}: {e}"
+            log(f"[diagnose] ({idx}/{total}) FALLO: {f.llm_error}")
     return state
 
 
@@ -168,7 +193,7 @@ def node_validate_fix(state: State) -> State:
             f.fix_is_valid = False
             f.llm_error = (
                 f"La correccion propuesta no fue parseable por sqlglot ({e}); "
-                "se muestra de todos modos como sugerencia, pero verificala."
+                "se muestra como sugerencia, pero verificala."
             )
     return state
 
@@ -189,8 +214,8 @@ def node_render(state: State) -> State:
         "",
         f"Se detectaron **{total_v}** error(es) de sintaxis en "
         f"**{len(state['files'])}** archivo(s) de `src/`. "
-        f"Un agente LangGraph + `{OPENAI_MODEL}` analizo cada caso y "
-        f"propone una correccion.",
+        f"Un agente LangGraph + `{OPENAI_MODEL}` analizo cada caso "
+        f"y propone una correccion.",
         "",
         "El merge queda bloqueado por la `Branch Protection Rule` "
         "hasta que todos los errores esten corregidos.",
@@ -249,15 +274,13 @@ def node_render(state: State) -> State:
         parts.append("")
 
     parts.append("---")
-    parts.append(
-        "_Reporte generado por `sql-syntax-check.yml` "
-        "(sqlfluff parse-only + LangGraph + OpenAI)._"
-    )
+    parts.append("_Reporte generado por `sql-syntax-check.yml` (sqlfluff + LangGraph + OpenAI)._")
     state["summary_markdown"] = "\n".join(parts)
     return state
 
 
 def node_publish(state: State) -> State:
+    log("[publish] Publicando reporte ...")
     body = state["summary_markdown"]
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
@@ -268,24 +291,28 @@ def node_publish(state: State) -> State:
             pass
 
     if not (GITHUB_REPO and PR_NUMBER and GITHUB_TOKEN):
-        print("[info] Modo local: comentario no publicado.\n", body)
+        log("[publish] Modo local: comentario no publicado.")
+        log(body)
         return state
 
     url = f"{GITHUB_API}/repos/{GITHUB_REPO}/issues/{PR_NUMBER}/comments"
-    resp = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {GITHUB_TOKEN}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-        json={"body": body},
-        timeout=30,
-    )
-    if resp.status_code >= 300:
-        print(f"[error] No se pudo publicar comentario: {resp.status_code} {resp.text}")
-    else:
-        print(f"[ok] Comentario publicado en PR #{PR_NUMBER}")
+    try:
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            json={"body": body},
+            timeout=30,
+        )
+        if resp.status_code >= 300:
+            log(f"[publish] No se pudo publicar: {resp.status_code} {resp.text[:200]}")
+        else:
+            log(f"[publish] OK -> PR #{PR_NUMBER}")
+    except requests.RequestException as e:
+        log(f"[publish] Error de red al publicar comentario: {e}")
     return state
 
 
@@ -306,11 +333,21 @@ def build_graph():
 
 
 def main() -> int:
+    log("=" * 60)
+    log("sql_syntax_fixer: arrancando")
+    log(f"  REPORT_PATH       = {REPORT_PATH}")
+    log(f"  OPENAI_MODEL      = {OPENAI_MODEL}")
+    log(f"  OPENAI_API_KEY    = {'set' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}")
+    log(f"  GITHUB_REPOSITORY = {GITHUB_REPO}")
+    log(f"  PR_NUMBER         = {PR_NUMBER}")
+    log("=" * 60)
     graph = build_graph()
     final_state = graph.invoke(
         {"files": [], "summary_markdown": "", "had_violations": False}
     )
-    return 1 if final_state["had_violations"] else 0
+    code = 1 if final_state["had_violations"] else 0
+    log(f"sql_syntax_fixer: terminado con exit code {code}")
+    return code
 
 
 if __name__ == "__main__":
