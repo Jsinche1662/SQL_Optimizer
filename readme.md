@@ -17,12 +17,13 @@ NOTA: Se está utilizando agentes en el optimizador para que se puedan brindar d
 │       ├── sql-optimizer.yml       # Herramienta 1
 │       └── sql-syntax-check.yml    # Herramienta 2
 ├── scripts/
-│   ├── sql_optimizer.py            # Pipeline LangGraph
+│   ├── sql_optimizer.py            # Script de optimizacion
+│   ├── sql_syntax_fixer.py         # Script de syntax check
 │   └── requirements.txt
 ├── sql/                            # Queries que pasan por el optimizador
 │   ├── reporte_ventas.sql
 │   └── top_productos.sql
-├── src/                            # SQL "de producción" — gate de sintaxis
+├── src/                            # Querys SQL que pasan por el check
 │   ├── schema_clientes.sql
 │   └── seed_productos.sql
 ├── tests/
@@ -36,7 +37,7 @@ Se está utilizando el secreto OPENAI_API_KEY para almacenar el token y reglas p
 
 A nivel de costos, cada llamada al optimizador consume aproximadamente 2 centavos de dolar, se están utilizando los tokens de OPEN AI que son mas costosos, se podría realizar la misma implementación con tokens mas baratos como los de deep seek.
 
-Precios por cada millon de tokens.
+Precios por cada millon de tokens (USD).
 - `OPEN AI` Input: 0,15 - Output: 0,6
 - `Anthropic` Input: 0,25 - Output: 1,25
 - `DeepSeek` Input: 0,14 - Output: 0,28
