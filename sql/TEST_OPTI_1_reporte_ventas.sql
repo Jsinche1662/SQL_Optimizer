@@ -5,7 +5,7 @@
 SELECT *
 FROM ventas v
 WHERE v.fecha >= '2025-01-01'
-  AND v.cliente_id IN (
+  AND v.cliente_id IN
     SELECT c.id
     FROM clientes c
     WHERE c.pais = 'PE'
