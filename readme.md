@@ -37,6 +37,6 @@ Se está utilizando el secreto OPENAI_API_KEY para almacenar el token y reglas p
 A nivel de costos, cada llamada al optimizador consume aproximadamente 2 centavos de dolar, se están utilizando los tokens de OPEN AI que son mas costosos, se podría realizar la misma implementación con tokens mas baratos como los de deep seek.
 
 Precios por cada millon de tokens.
-`OPEN AI` Input: 0,15 - Output: 0,6
-`Anthropic` Input: 0,25 - Output: 1,25
-`DeepSeek` Input: 0,14 - Output: 0,28
+- `OPEN AI` Input: 0,15 - Output: 0,6
+- `Anthropic` Input: 0,25 - Output: 1,25
+- `DeepSeek` Input: 0,14 - Output: 0,28
