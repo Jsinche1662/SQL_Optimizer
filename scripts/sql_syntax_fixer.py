@@ -1,9 +1,5 @@
 """
-SQL Syntax Fixer Agent
-----------------------
-Pipeline LangGraph que se ejecuta DESPUES de sqlfluff (en el workflow
-sql-syntax-check.yml) y enriquece el comentario de la PR con un
-diagnostico humano y una propuesta de correccion por cada error.
+SQL Syntax Fixer 
 """
 from __future__ import annotations
 
@@ -13,11 +9,9 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, TypedDict
-
 import requests
 import sqlglot
 from sqlglot.errors import ParseError
-
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -34,7 +28,7 @@ HEAD_SHA = os.getenv("HEAD_SHA", "")
 
 SYNTAX_CODES = {"PRS", "TMP", "LXR"}
 
-SYSTEM_PROMPT = """Eres un experto en SQL que ayuda a desarrolladores a
+SYSTEM_MESSAGE = """Eres un experto en SQL que ayuda a desarrolladores a
 corregir errores de SINTAXIS detectados por sqlfluff.
 
 Te dan:
@@ -146,7 +140,7 @@ def node_diagnose(state: State) -> State:
         )
         try:
             resp = llm.invoke(
-                [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
+                [SystemMessage(content=SYSTEM_MESSAGE), HumanMessage(content=user_prompt)]
             )
             raw = (resp.content or "").strip()
             if raw.startswith("```"):

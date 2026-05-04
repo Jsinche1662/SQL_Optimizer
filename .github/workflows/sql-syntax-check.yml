@@ -2,8 +2,8 @@ name: SQL Syntax Gate (src/)
 
 # Bloquea el merge si los .sql de src/ no son sintácticamente válidos.
 # Además publica un comentario detallado en la PR con:
-#   - tabla de errores (línea/columna/código/mensaje) producida por sqlfluff,
-#   - diagnóstico humano + corrección sugerida producidos por un agente
+#   - tabla de errores (sqlfluff)
+#   - Corrección sugerida producidos por un agente
 #     LangGraph + OpenAI (validada con sqlglot).
 on:
   pull_request:
@@ -95,11 +95,6 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPORT_PATH: sqlfluff_report.json
         run: python scripts/sql_syntax_fixer.py
-        # El script:
-        #   - publica el comentario en la PR (con detalle + fix sugerido),
-        #   - escribe el mismo Markdown en GITHUB_STEP_SUMMARY,
-        #   - retorna exit 1 si hubo errores de sintaxis,
-        # lo que hace fallar el job y dispara la Branch Protection Rule.
 
       - name: Upload sqlfluff JSON report
         if: always() && steps.changes.outputs.files != ''

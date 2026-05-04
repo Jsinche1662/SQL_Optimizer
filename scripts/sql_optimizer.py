@@ -4,15 +4,15 @@ SQL Optimizer Agent
 Pipeline LangGraph que:
   1) Detecta archivos .sql cambiados en una Pull Request (carpeta sql/).
   2) Valida la sintaxis con sqlglot (dialecto ANSI / multi-dialecto).
-  3) Pide a un modelo de OpenAI que optimice cada query SIN alterar la lógica.
-  4) Re-valida la salida optimizada para asegurar que sigue siendo SQL parseable.
+  3) Pide a un modelo de OpenAI que optimice las querys SIN alterar la lógica.
+  4) Re-valida la salida optimizada para asegurar que sigue siendo SQL correcto.
   5) Construye un log de cambios (diff + explicación) y lo publica como
      comentario en la Pull Request a través de la GitHub API.
 
-Variables de entorno requeridas (las inyecta GitHub Actions):
-  OPENAI_API_KEY   - token de OpenAI
+Variables de entorno requeridas (Están en las GitHub Actions):
+  OPENAI_API_KEY   - token de OpenAI (Se tiene que configurar el secreto)
   GITHUB_TOKEN     - token automático del workflow
-  GITHUB_REPOSITORY - "owner/repo" (lo expone Actions)
+  GITHUB_REPOSITORY - "owner/repo"
   PR_NUMBER        - número de la PR (lo pasa el workflow)
   BASE_SHA         - SHA base de la PR
   HEAD_SHA         - SHA head de la PR
@@ -33,25 +33,18 @@ from typing import List, Optional, TypedDict
 import requests
 import sqlglot
 from sqlglot.errors import ParseError
-
-# LangGraph / LangChain
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
-
-# --------------------------------------------------------------------------- #
-# Configuración
-# --------------------------------------------------------------------------- #
+"""
+Variables de entorno ACTIONS
+"""
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 SQL_DIALECT = os.getenv("SQL_DIALECT", "ansi")
 TARGET_FOLDER = os.getenv("TARGET_FOLDER", "sql")
-
-# sqlglot no tiene un dialecto literal llamado "ansi"; para parser genérico
-# se pasa None. Para sqlfluff, en cambio, "ansi" sí es un dialecto válido.
 _SQLGLOT_DIALECT = None if SQL_DIALECT.lower() == "ansi" else SQL_DIALECT
-
 GITHUB_API = "https://api.github.com"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPOSITORY")
@@ -60,7 +53,12 @@ BASE_SHA = os.getenv("BASE_SHA")
 HEAD_SHA = os.getenv("HEAD_SHA")
 
 
-SYSTEM_PROMPT = """Eres un experto en optimización de SQL.
+
+"""
+SYSTEM_MESSAGE
+"""
+
+SYSTEM_MESSAGE = """Eres un experto en optimización de SQL.
 Tu tarea es reescribir una consulta SQL para que sea más eficiente
 SIN alterar la lógica ni el conjunto de resultados que produce.
 
@@ -82,9 +80,9 @@ No agregues texto fuera del JSON. No uses bloques de código markdown.
 """
 
 
-# --------------------------------------------------------------------------- #
-# Estado del grafo
-# --------------------------------------------------------------------------- #
+"""
+GRAFO
+"""
 
 
 @dataclass
@@ -107,10 +105,9 @@ class GraphState(TypedDict):
     summary_markdown: str
 
 
-# --------------------------------------------------------------------------- #
-# Utilidades GitHub
-# --------------------------------------------------------------------------- #
-
+"""
+GITHUB UTILS
+"""
 
 def _gh_headers() -> dict:
     return {
@@ -154,13 +151,12 @@ def post_pr_comment(body: str) -> None:
         print(f"[ok] Comentario publicado en PR #{PR_NUMBER}")
 
 
-# --------------------------------------------------------------------------- #
-# Nodos del grafo LangGraph
-# --------------------------------------------------------------------------- #
-
+"""
+NODOS LANG_GRAPH
+"""
 
 def node_load_files(state: GraphState) -> GraphState:
-    """Lee los archivos SQL que vienen de la PR."""
+    """Lee los archivos SQL que vienen de la PR. Solo los de la carpeta SQL"""
     paths = get_changed_sql_files()
     print(f"[load] {len(paths)} archivo(s) SQL detectado(s)")
     files: List[FileResult] = []
@@ -201,7 +197,7 @@ def node_optimize(state: GraphState) -> GraphState:
         )
         try:
             resp = llm.invoke(
-                [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
+                [SystemMessage(content=SYSTEM_MESSAGE), HumanMessage(content=user_prompt)]
             )
             raw = (resp.content or "").strip()
             if raw.startswith("```"):
@@ -366,6 +362,7 @@ def main() -> int:
     invalid = [f for f in final_state["files"] if not f.is_valid_input]
     if invalid:
         print(f"[warn] {len(invalid)} archivo(s) con SQL inválido (no se bloquea PR aquí).")
+        # Si se quiere bloquear colocar 1
     return 0
 
 
