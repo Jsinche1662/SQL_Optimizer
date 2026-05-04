@@ -1,0 +1,105 @@
+name: SQL Syntax Check (src/)
+
+# Bloquea el merge si los .sql de src/ no son sintácticamente válidos.
+# Además publica un comentario detallado en la PR con:
+#   - tabla de errores (sqlfluff)
+#   - Corrección sugerida producidos por un agente
+#     LangGraph + OpenAI (validada con sqlglot).
+on:
+  pull_request:
+    paths:
+      - "src/**.sql"
+      - ".sqlfluff"
+      - ".github/workflows/sql-syntax-check.yml"
+      - "scripts/sql_syntax_fixer.py"
+      - "scripts/requirements.txt"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: sql-syntax-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: sqlfluff syntax check
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout PR HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies (sqlfluff + LangGraph stack)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "sqlfluff>=3.0.0"
+          pip install -r scripts/requirements.txt
+
+      - name: Detect changed SQL files in src/
+        id: changes
+        run: |
+          set -e
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          FILES=$(git diff --name-only --diff-filter=AMR "$BASE" "$HEAD" \
+            | grep -E '^src/.*\.sql$' || true)
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$FILES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          if [ -z "$FILES" ]; then
+            echo "No changed SQL files in src/."
+          else
+            echo "Changed SQL files:"
+            echo "$FILES"
+          fi
+
+      - name: Run sqlfluff and capture violations
+        if: steps.changes.outputs.files != ''
+        run: |
+          set +e
+          FILES="${{ steps.changes.outputs.files }}"
+
+          # 1) Anotaciones inline en la pestaña "Files changed".
+          echo "$FILES" | xargs sqlfluff lint \
+              --format github-annotation-native \
+              --disable-progress-bar --nofail || true
+
+          # 2) Reporte JSON estructurado para el fixer.
+          echo "$FILES" | xargs sqlfluff lint \
+              --format json \
+              --disable-progress-bar --nofail > sqlfluff_report.json
+          echo "JSON_BYTES=$(wc -c < sqlfluff_report.json)"
+          set -e
+
+      - name: Diagnose + propose fix (LangGraph + OpenAI)
+        if: steps.changes.outputs.files != ''
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4o-mini' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPORT_PATH: sqlfluff_report.json
+        run: python scripts/sql_syntax_fixer.py
+
+      - name: Upload sqlfluff JSON report
+        if: always() && steps.changes.outputs.files != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlfluff-report
+          path: sqlfluff_report.json
+          if-no-files-found: ignore

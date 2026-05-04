@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Reportes generados por el optimizer
+sql_optimizer_report.md
+
+# OS
+.DS_Store
+Thumbs.db
